@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>売掛金エイジング管理</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background: #0f172a; }
+  .bucket-未請求 { border-color: #94a3b8; }
+  .bucket-0-30 { border-color: #fbbf24; }
+  .bucket-31-60 { border-color: #f97316; }
+  .bucket-61-90 { border-color: #ef4444; }
+  .bucket-90超 { border-color: #7f1d1d; }
+  .header-未請求 { background: #334155; color: #cbd5e1; }
+  .header-0-30 { background: #92400e; color: #fde68a; }
+  .header-31-60 { background: #7c2d12; color: #fed7aa; }
+  .header-61-90 { background: #7f1d1d; color: #fecaca; }
+  .header-90超 { background: #450a0a; color: #f87171; }
+  .row-paid { opacity: 0.45; }
+  @keyframes slideDown { from { opacity:0; transform: translateY(-8px); } to { opacity:1; transform: translateY(0); } }
+  .row-anim { animation: slideDown 0.3s ease; }
+  input[type=date], select { color-scheme: dark; }
+</style>
+</head>
+<body class="min-h-screen text-slate-200 p-4">
+<div class="max-w-5xl mx-auto">
+  <!-- Header -->
+  <div class="text-center mb-6 pt-3">
+    <h1 class="text-3xl font-bold mb-1" style="color:#fbbf24">📋 売掛金エイジング管理</h1>
+    <p class="text-slate-400 text-sm">請求書ごとに回収状況・経過日数を一元管理</p>
+  </div>
+
+  <!-- Summary Dashboard -->
+  <div id="summaryDash" class="grid grid-cols-2 md:grid-cols-5 gap-2 mb-5"></div>
+
+  <!-- Add Invoice Form -->
+  <div class="bg-slate-800 rounded-2xl border border-slate-700 p-5 mb-5">
+    <h2 class="font-bold mb-3" style="color:#fbbf24">＋ 請求書を追加</h2>
+    <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+      <div>
+        <label class="text-xs text-slate-400 block mb-1">クライアント名</label>
+        <input id="clientName" type="text" placeholder="例：株式会社ABC"
+          class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-500"
+          aria-label="クライアント名を入力">
+      </div>
+      <div>
+        <label class="text-xs text-slate-400 block mb-1">請求書番号</label>
+        <input id="invoiceNum" type="text" placeholder="例：INV-2026-001"
+          class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-500"
+          aria-label="請求書番号を入力">
+      </div>
+      <div>
+        <label class="text-xs text-slate-400 block mb-1">金額 (¥)</label>
+        <input id="amount" type="number" min="0" step="1000" placeholder="100000"
+          class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-500"
+          aria-label="請求金額を円で入力">
+      </div>
+      <div>
+        <label class="text-xs text-slate-400 block mb-1">請求日</label>
+        <input id="invoiceDate" type="date"
+          class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-500"
+          aria-label="請求日を選択">
+      </div>
+      <div>
+        <label class="text-xs text-slate-400 block mb-1">支払期日</label>
+        <input id="dueDate" type="date"
+          class="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-500"
+          aria-label="支払期日を選択">
+      </div>
+      <div class="flex items-end">
+        <button onclick="addInvoice()"
+          class="w-full font-bold py-2 px-4 rounded-xl transition-colors text-slate-900"
+          style="background:#fbbf24" aria-label="請求書を追加する">追加する</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Aging Buckets -->
+  <div id="bucketsContainer" class="space-y-4"></div>
+</div>
+
+<script>
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+const STORAGE_KEY = 'invoice-aging-v1';
+let invoices = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+
+const TODAY = new Date().toISOString().slice(0,10);
+document.getElementById('invoiceDate').value = TODAY;
+
+// Set default due date 30 days from today
+const d30 = new Date(); d30.setDate(d30.getDate()+30);
+document.getElementById('dueDate').value = d30.toISOString().slice(0,10);
+
+function save() { localStorage.setItem(STORAGE_KEY, JSON.stringify(invoices)); }
+
+function addInvoice() {
+  const client = document.getElementById('clientName').value.trim();
+  const num = document.getElementById('invoiceNum').value.trim();
+  const amount = parseFloat(document.getElementById('amount').value);
+  const invDate = document.getElementById('invoiceDate').value;
+  const dueDate = document.getElementById('dueDate').value;
+
+  if (!client || !num || isNaN(amount) || amount <= 0 || !invDate || !dueDate) {
+    alert('全項目を入力してください');
+    return;
+  }
+
+  invoices.push({ id: Date.now(), client, num, amount, invDate, dueDate, paid: false, paidDate: null });
+  save();
+  render();
+
+  document.getElementById('clientName').value = '';
+  document.getElementById('invoiceNum').value = '';
+  document.getElementById('amount').value = '';
+}
+
+function markPaid(id) {
+  const inv = invoices.find(i => i.id === id);
+  if (!inv) return;
+  inv.paid = !inv.paid;
+  inv.paidDate = inv.paid ? TODAY : null;
+  save();
+  render();
+}
+
+function deleteInvoice(id) {
+  invoices = invoices.filter(i => i.id !== id);
+  save();
+  render();
+}
+
+function daysSinceDue(inv) {
+  if (!inv.dueDate) return null;
+  const due = new Date(inv.dueDate);
+  const today = new Date(TODAY);
+  return Math.floor((today - due) / 86400000);
+}
+
+function daysUntilDue(inv) {
+  const due = new Date(inv.dueDate);
+  const inv_date = new Date(inv.invDate);
+  const today = new Date(TODAY);
+  return Math.floor((today - inv_date) / 86400000);
+}
+
+function getBucket(inv) {
+  if (!inv.invDate) return '未請求';
+  const dsd = daysSinceDue(inv);
+  if (dsd === null) return '未請求';
+  if (dsd < 0) return '0-30';  // not yet due
+  if (dsd <= 30) return '0-30';
+  if (dsd <= 60) return '31-60';
+  if (dsd <= 90) return '61-90';
+  return '90超';
+}
+
+const BUCKETS = ['未請求','0-30','31-60','61-90','90超'];
+const BUCKET_LABELS = {
+  '未請求': '未請求',
+  '0-30': '0〜30日',
+  '31-60': '31〜60日',
+  '61-90': '61〜90日',
+  '90超': '90日超'
+};
+const BUCKET_DESC = {
+  '未請求': '支払期日前',
+  '0-30': '期日超過 0〜30日',
+  '31-60': '期日超過 31〜60日',
+  '61-90': '期日超過 61〜90日',
+  '90超': '期日超過 90日以上'
+};
+
+function fmt(v) {
+  return '¥' + Math.round(v).toLocaleString('ja-JP');
+}
+
+function render() {
+  const unpaid = invoices.filter(i => !i.paid);
+  const paid = invoices.filter(i => i.paid);
+
+  // Summary
+  const summaryEl = document.getElementById('summaryDash');
+  const bucketTotals = {};
+  BUCKETS.forEach(b => {
+    bucketTotals[b] = unpaid.filter(i => getBucket(i) === b).reduce((a,i) => a+i.amount, 0);
+  });
+  const grandTotal = Object.values(bucketTotals).reduce((a,b)=>a+b,0);
+
+  summaryEl.innerHTML = BUCKETS.map(b => {
+    const total = bucketTotals[b];
+    const classes = {
+      '未請求': 'bg-slate-700 border-slate-600 text-slate-300',
+      '0-30': 'bg-yellow-900/50 border-yellow-700 text-yellow-200',
+      '31-60': 'bg-orange-900/50 border-orange-700 text-orange-200',
+      '61-90': 'bg-red-900/50 border-red-700 text-red-200',
+      '90超': 'bg-red-950/80 border-red-900 text-red-300',
+    }[b];
+    return `
+      <div class="rounded-xl border p-3 text-center ${classes}">
+        <div class="text-xs opacity-70 mb-1">${BUCKET_LABELS[b]}</div>
+        <div class="text-lg font-bold">${fmt(total)}</div>
+        <div class="text-xs opacity-60">${unpaid.filter(i=>getBucket(i)===b).length}件</div>
+      </div>
+    `;
+  }).join('') + `
+    <div class="rounded-xl border border-yellow-600 bg-yellow-900/30 p-3 text-center col-span-2 md:col-span-1">
+      <div class="text-xs text-yellow-400 mb-1">未回収合計</div>
+      <div class="text-lg font-bold text-yellow-300">${fmt(grandTotal)}</div>
+      <div class="text-xs text-yellow-500">${unpaid.length}件</div>
+    </div>
+  `;
+
+  // Buckets
+  const container = document.getElementById('bucketsContainer');
+  const allToShow = [...unpaid, ...paid];
+
+  container.innerHTML = BUCKETS.map(bucket => {
+    const bucketInvs = allToShow.filter(i => getBucket(i) === bucket);
+    if (bucketInvs.length === 0) return '';
+
+    const bucketClass = `bucket-${bucket}`;
+    const headerClass = `header-${bucket}`;
+
+    const rows = bucketInvs.map(inv => {
+      const dsd = daysSinceDue(inv);
+      const overdueBadge = dsd !== null && dsd > 0 && !inv.paid ?
+        `<span class="text-xs px-1.5 py-0.5 rounded bg-red-900 text-red-300">${dsd}日超過</span>` :
+        dsd !== null && dsd <= 0 ?
+        `<span class="text-xs px-1.5 py-0.5 rounded bg-slate-700 text-slate-400">${Math.abs(dsd)}日後</span>` : '';
+
+      return `
+        <tr class="row-anim border-b border-slate-700/50 ${inv.paid ? 'row-paid' : ''}">
+          <td class="px-3 py-2 text-sm">
+            <div class="font-medium text-slate-200">${escapeHtml(inv.client)}</div>
+            <div class="text-xs text-slate-500">${escapeHtml(inv.num)}</div>
+          </td>
+          <td class="px-3 py-2 text-right font-bold text-yellow-300">${fmt(inv.amount)}</td>
+          <td class="px-3 py-2 text-sm text-slate-400">${inv.invDate}</td>
+          <td class="px-3 py-2 text-sm text-slate-400">${inv.dueDate} ${overdueBadge}</td>
+          <td class="px-3 py-2 text-center">
+            ${inv.paid ?
+              `<span class="text-xs bg-green-900 text-green-300 px-2 py-0.5 rounded-full">回収済</span>` :
+              `<span class="text-xs bg-slate-700 text-slate-400 px-2 py-0.5 rounded-full">未回収</span>`
+            }
+          </td>
+          <td class="px-3 py-2 text-center">
+            <div class="flex gap-1 justify-center">
+              <button onclick="markPaid(${inv.id})"
+                class="text-xs px-2 py-1 rounded transition-colors ${inv.paid ? 'bg-slate-700 hover:bg-slate-600 text-slate-400' : 'bg-green-800 hover:bg-green-700 text-green-300'}"
+                aria-label="${inv.paid ? '未回収に戻す' : '回収済みにする'}">
+                ${inv.paid ? '戻す' : '回収済'}
+              </button>
+              <button onclick="deleteInvoice(${inv.id})"
+                class="text-xs px-2 py-1 rounded bg-red-900/60 hover:bg-red-900 text-red-400"
+                aria-label="請求書を削除">削除</button>
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    return `
+      <div class="rounded-2xl border-2 overflow-hidden ${bucketClass}">
+        <div class="px-4 py-3 flex items-center justify-between ${headerClass}">
+          <span class="font-bold">${BUCKET_LABELS[bucket]} — ${BUCKET_DESC[bucket]}</span>
+          <span class="text-sm font-bold">${fmt(bucketTotals[bucket])} / ${unpaid.filter(i=>getBucket(i)===bucket).length}件未回収</span>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-slate-800/80">
+              <tr class="text-xs text-slate-400">
+                <th class="px-3 py-2 text-left">クライアント / 番号</th>
+                <th class="px-3 py-2 text-right">金額</th>
+                <th class="px-3 py-2 text-left">請求日</th>
+                <th class="px-3 py-2 text-left">支払期日</th>
+                <th class="px-3 py-2 text-center">状態</th>
+                <th class="px-3 py-2 text-center">操作</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  if (container.innerHTML.trim() === '') {
+    container.innerHTML = `
+      <div class="text-center py-12 text-slate-500">
+        <div class="text-5xl mb-3">📄</div>
+        <p>まだ請求書がありません。<br>上のフォームから追加してください。</p>
+      </div>
+    `;
+  }
+}
+
+render();
+</script>
+</body>
+</html>
